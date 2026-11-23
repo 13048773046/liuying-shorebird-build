@@ -1,4 +1,4 @@
 VERSION=0.9.55
 BUILD=126
-SOURCE_URL=https://aka.doubaocdn.com/s/R3fMpFik4k
-ATTEMPT=5
+SOURCE_URL=https://aka.doubaocdn.com/s/MUulkgj0CU
+ATTEMPT=6
