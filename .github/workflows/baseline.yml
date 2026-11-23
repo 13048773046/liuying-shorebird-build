@@ -35,27 +35,28 @@ jobs:
         run: |
           set -euo pipefail
           curl -fsSL --retry 5 https://shorebird.dev/install.sh | bash
-          test -x "$HOME/.config/shorebird/bin/shorebird"
-          "$HOME/.config/shorebird/bin/shorebird" --version
+          test -x "$HOME/.shorebird/bin/shorebird"
+          "$HOME/.shorebird/bin/shorebird" --version
 
       - name: Restore Shorebird login
         env:
           SHOREBIRD_CREDENTIALS: ${{ secrets.SHOREBIRD_CREDENTIALS }}
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/.config/shorebird"
+          mkdir -p "$HOME/.shorebird" "$HOME/.config/shorebird"
+          printf '%s' "$SHOREBIRD_CREDENTIALS" > "$HOME/.shorebird/credentials-v2.json"
           printf '%s' "$SHOREBIRD_CREDENTIALS" > "$HOME/.config/shorebird/credentials-v2.json"
-          chmod 600 "$HOME/.config/shorebird/credentials-v2.json"
+          chmod 600 "$HOME/.shorebird/credentials-v2.json" "$HOME/.config/shorebird/credentials-v2.json"
 
       - name: Verify Shorebird login
         run: |
-          "$HOME/.config/shorebird/bin/shorebird" auth status
+          "$HOME/.shorebird/bin/shorebird" auth status
 
       - name: Build signed-in release (unsigned IPA)
         working-directory: source
         run: |
           set -o pipefail
-          "$HOME/.config/shorebird/bin/shorebird" release ios --no-codesign --build-name 0.9.55 --build-number 126 2>&1 | tee /tmp/build.log
+          "$HOME/.shorebird/bin/shorebird" release ios --no-codesign --build-name 0.9.55 --build-number 126 2>&1 | tee /tmp/build.log
 
       - name: Locate or assemble IPA
         id: ipa
