@@ -36,7 +36,7 @@ jobs:
           runner=[a for a in arts if a.get('arch')=='runner'][0]
           open('/tmp/runner_hash','w').write(runner['hash'])
           open('/tmp/runner_url','w').write(runner['url'])
-          print('RUNNER_HASH', runner['hash'], 'SIZE', runner['size'])
+          print('RUNNER_ARCHIVE_HASH', runner['hash'], 'SIZE', runner['size'])
           PY
           curl -fSL --retry 3 "$(cat /tmp/runner_url)" -o /tmp/runner.zip
           mkdir -p /tmp/runner_extract
@@ -56,6 +56,7 @@ jobs:
           assert pl.get('CFBundleIdentifier')=='com.community.communityApp'
           assert pl.get('CFBundleShortVersionString')=='0.9.55'
           assert str(pl.get('CFBundleVersion'))=='126'
+          release_binary_hash=hashlib.sha256(open(os.path.join(app_dir,'Runner'),'rb').read()).hexdigest()
           out='/tmp/ipa_root'
           shutil.rmtree(out, ignore_errors=True)
           os.makedirs(out)
@@ -64,13 +65,13 @@ jobs:
           for f in os.listdir(dst):
               if f=='_CodeSignature': shutil.rmtree(os.path.join(dst,f), ignore_errors=True)
           subprocess.run(['zip','-qry','/tmp/matched.ipa','Payload'], cwd=out, check=True)
-          runner_hash=hashlib.sha256(open(os.path.join(dst,'Runner'),'rb').read()).hexdigest()
-          expected=open('/tmp/runner_hash').read().strip()
-          print('PACKAGED_RUNNER_SHA256', runner_hash)
-          print('EXPECTED_RUNNER_SHA256', expected)
-          assert runner_hash==expected, 'Runner hash does not match release artifact'
+          packaged_binary_hash=hashlib.sha256(open(os.path.join(dst,'Runner'),'rb').read()).hexdigest()
+          print('RELEASE_RUNNER_SHA256', release_binary_hash)
+          print('PACKAGED_RUNNER_SHA256', packaged_binary_hash)
+          assert packaged_binary_hash==release_binary_hash, 'Runner binary hash changed during packaging'
           print('IPA_SIZE', os.path.getsize('/tmp/matched.ipa'))
           print('IPA_SHA256', hashlib.sha256(open('/tmp/matched.ipa','rb').read()).hexdigest())
+          open('/tmp/release_runner_hash','w').write(release_binary_hash)
           PY
 
       - name: Upload matched IPA to production
@@ -90,4 +91,5 @@ jobs:
           print('IPA_URL', 'https://www.dbmt999.asia/community/files/community_ipa_0.9.55_release_match_unsigned.ipa')
           print('IPA_SHA256', hashlib.sha256(open('/tmp/matched.ipa','rb').read()).hexdigest())
           print('IPA_SIZE', os.path.getsize('/tmp/matched.ipa'))
+          print('BINARY_SHA256', open('/tmp/release_runner_hash').read())
           PY
