@@ -1,0 +1,99 @@
+name: Rebuild matched iOS IPA
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - rebuild-trigger.txt
+
+permissions:
+  contents: read
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Fetch token and release runner
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PASS: ${{ secrets.PROD_PASS }}
+        run: |
+          set -euo pipefail
+          ASKPASS=$(mktemp)
+          printf '#!/bin/sh\necho "%s"\n' "$PROD_PASS" > "$ASKPASS"
+          chmod 700 "$ASKPASS"
+          DISPLAY=:0 SSH_ASKPASS="$ASKPASS" SSH_ASKPASS_REQUIRE=force ssh -o StrictHostKeyChecking=no "root@$PROD_HOST" 'cat /root/.shorebird_token' > /tmp/shorebird_token
+          test -s /tmp/shorebird_token
+          rm -f "$ASKPASS"
+          TOKEN=$(cat /tmp/shorebird_token)
+          APP=f8c3d63a-0d9a-411d-9553-fcb7e7232f43
+          curl -sS -H "Authorization: Bearer $TOKEN" \
+            "https://api.shorebird.dev/api/v1/apps/$APP/releases/1005608/artifacts?platform=ios" -o /tmp/artifacts.json
+          python3 - <<'PY'
+          import json
+          arts=json.load(open('/tmp/artifacts.json'))['artifacts']
+          runner=[a for a in arts if a.get('arch')=='runner'][0]
+          open('/tmp/runner_hash','w').write(runner['hash'])
+          open('/tmp/runner_url','w').write(runner['url'])
+          print('RUNNER_HASH', runner['hash'], 'SIZE', runner['size'])
+          PY
+          curl -fSL --retry 3 "$(cat /tmp/runner_url)" -o /tmp/runner.zip
+          mkdir -p /tmp/runner_extract
+          unzip -q /tmp/runner.zip -d /tmp/runner_extract
+          find /tmp/runner_extract -maxdepth 3 -name Info.plist -print
+
+      - name: Package signed-path IPA from exact release app
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, shutil, zipfile, plistlib, hashlib, subprocess
+          root='/tmp/runner_extract'
+          app_dir=None
+          for base, dirs, files in os.walk(root):
+              if 'Info.plist' in files and 'Runner' in files and base.endswith('Runner.app'):
+                  app_dir=base; break
+          if not app_dir:
+              raise SystemExit('Runner.app not found')
+          pl=plistlib.load(open(os.path.join(app_dir,'Info.plist'),'rb'))
+          print('APP_DIR', app_dir)
+          print('BUNDLE', pl.get('CFBundleIdentifier'), 'VERSION', pl.get('CFBundleShortVersionString'), 'BUILD', pl.get('CFBundleVersion'))
+          assert pl.get('CFBundleIdentifier')=='com.community.communityApp'
+          assert pl.get('CFBundleShortVersionString')=='0.9.55'
+          assert str(pl.get('CFBundleVersion'))=='126'
+          out='/tmp/ipa_root'
+          shutil.rmtree(out, ignore_errors=True)
+          os.makedirs(out)
+          dst=os.path.join(out,'Payload','Runner.app')
+          shutil.copytree(app_dir, dst)
+          # ensure no stale signature
+          for f in os.listdir(dst):
+              if f=='_CodeSignature': shutil.rmtree(os.path.join(dst,f), ignore_errors=True)
+          subprocess.run(['zip','-qry','/tmp/matched.ipa','Payload'], cwd=out, check=True)
+          runner_hash=hashlib.sha256(open(os.path.join(dst,'Runner'),'rb').read()).hexdigest()
+          expected=open('/tmp/runner_hash').read().strip()
+          print('PACKAGED_RUNNER_SHA256', runner_hash)
+          print('EXPECTED_RUNNER_SHA256', expected)
+          assert runner_hash==expected, 'Runner hash does not match release artifact'
+          print('IPA_SIZE', os.path.getsize('/tmp/matched.ipa'))
+          print('IPA_SHA256', hashlib.sha256(open('/tmp/matched.ipa','rb').read()).hexdigest())
+          PY
+
+      - name: Upload matched IPA to production
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PASS: ${{ secrets.PROD_PASS }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet --user --break-system-packages paramiko
+          python3 - <<'PY'
+          import os, paramiko, hashlib
+          c=paramiko.SSHClient(); c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+          c.connect(os.environ['PROD_HOST'], username='root', password=os.environ['PROD_PASS'], timeout=30)
+          s=c.open_sftp()
+          remote='/www/wwwroot/Yosar-community/files/community_ipa_0.9.55_release_match_unsigned.ipa'
+          s.put('/tmp/matched.ipa', remote); s.chmod(remote,0o644); s.close(); c.close()
+          print('IPA_URL', 'https://www.dbmt999.asia/community/files/community_ipa_0.9.55_release_match_unsigned.ipa')
+          print('IPA_SHA256', hashlib.sha256(open('/tmp/matched.ipa','rb').read()).hexdigest())
+          print('IPA_SIZE', os.path.getsize('/tmp/matched.ipa'))
+          PY
