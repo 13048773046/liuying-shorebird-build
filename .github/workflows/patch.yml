@@ -76,7 +76,7 @@ jobs:
         run: |
           set -o pipefail
           "$HOME/.shorebird/bin/shorebird" patch ios \
-            --release-version "$VERSION" \
+            --release-version "$VERSION+$BUILD" \
             --build-name "$VERSION" \
             --build-number "$BUILD" \
             --no-codesign \
@@ -84,8 +84,8 @@ jobs:
 
       - name: List releases and patches
         run: |
-          "$HOME/.shorebird/bin/shorebird" releases list --version "$VERSION" 2>&1 | tee -a /tmp/patch.log || true
-          "$HOME/.shorebird/bin/shorebird" patches list --version "$VERSION" 2>&1 | tee -a /tmp/patch.log || true
+          "$HOME/.shorebird/bin/shorebird" releases list 2>&1 | tee -a /tmp/patch.log || true
+          "$HOME/.shorebird/bin/shorebird" patches list --release-version "$VERSION+$BUILD" 2>&1 | tee -a /tmp/patch.log || true
 
       - name: Upload patch log to production
         if: always()
