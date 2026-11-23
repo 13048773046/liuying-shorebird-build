@@ -1,0 +1,41 @@
+name: Diagnose patch metrics
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - diag-metrics-trigger.txt
+
+permissions:
+  contents: read
+
+jobs:
+  metrics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Query Shorebird metrics
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PASS: ${{ secrets.PROD_PASS }}
+        run: |
+          set -euo pipefail
+          ASKPASS=$(mktemp)
+          printf '#!/bin/sh\necho "%s"\n' "$PROD_PASS" > "$ASKPASS"
+          chmod 700 "$ASKPASS"
+          DISPLAY=:0 SSH_ASKPASS="$ASKPASS" SSH_ASKPASS_REQUIRE=force ssh -o StrictHostKeyChecking=no "root@$PROD_HOST" 'cat /root/.shorebird_token' > /tmp/shorebird_token
+          test -s /tmp/shorebird_token
+          rm -f "$ASKPASS"
+          TOKEN=$(cat /tmp/shorebird_token)
+          APP=f8c3d63a-0d9a-411d-9553-fcb7e7232f43
+          REL=1005608
+          echo '=== PATCHES ==='
+          curl -sS -H "Authorization: Bearer $TOKEN" "https://api.shorebird.dev/api/v1/apps/$APP/releases/$REL/patches" | python3 -m json.tool | head -200
+          echo '=== DOWNLOADS ==='
+          curl -sS -H "Authorization: Bearer $TOKEN" "https://api.shorebird.dev/api/v1/apps/$APP/releases/$REL/metrics/patch-downloads" | python3 -m json.tool | head -200
+          echo '=== INSTALLS ==='
+          curl -sS -H "Authorization: Bearer $TOKEN" "https://api.shorebird.dev/api/v1/apps/$APP/releases/$REL/metrics/patch-installs" | python3 -m json.tool | head -200
+          echo '=== CHECK ==='
+          curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+            -d '{"app_id":"f8c3d63a-0d9a-411d-9553-fcb7e7232f43","release_version":"0.9.55+126","platform":"ios","arch":"aarch64","channel":"stable","patch_number":6}' \
+            "https://api.shorebird.dev/api/v1/patches/check" | python3 -m json.tool | head -100
