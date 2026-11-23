@@ -1,6 +1,10 @@
 name: Build and publish Shorebird Android patch
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - android-patch-trigger.txt
   workflow_dispatch:
     inputs:
       source_url:
@@ -24,9 +28,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      - name: Resolve inputs
+        run: |
+          echo "SOURCE_URL=${{ inputs.source_url || 'https://aka.doubaocdn.com/s/R3fMpFik4k' }}" >> "$GITHUB_ENV"
+          echo "VERSION=${{ inputs.version || '0.9.55' }}" >> "$GITHUB_ENV"
+          echo "BUILD=${{ inputs.build || '126' }}" >> "$GITHUB_ENV"
+
       - name: Download patch source
-        env:
-          SOURCE_URL: ${{ inputs.source_url }}
         run: |
           set -euo pipefail
           curl -fSL --retry 5 --max-time 600 "$SOURCE_URL" -o /tmp/patch-source.tar.gz
@@ -42,7 +50,7 @@ jobs:
           git config user.email "ci@liuying.local"
           git config user.name "liuying-ci"
           git add -A
-          git commit -q -m "shorebird android patch ${{ inputs.version }}+${{ inputs.build }}"
+          git commit -q -m "shorebird android patch $VERSION+$BUILD"
 
       - name: Install Shorebird
         run: |
@@ -92,16 +100,16 @@ jobs:
         run: |
           set -o pipefail
           "$SHOREBIRD_BIN" patch android \
-            --release-version "${{ inputs.version }}+${{ inputs.build }}" \
-            --build-name "${{ inputs.version }}" \
-            --build-number "${{ inputs.build }}" \
+            --release-version "$VERSION+$BUILD" \
+            --build-name "$VERSION" \
+            --build-number "$BUILD" \
             --track stable \
             --no-confirm 2>&1 | tee /tmp/patch.log
 
       - name: List releases and patches
         run: |
           "$SHOREBIRD_BIN" releases list 2>&1 | tee -a /tmp/patch.log || true
-          "$SHOREBIRD_BIN" patches list --release-version "${{ inputs.version }}+${{ inputs.build }}" 2>&1 | tee -a /tmp/patch.log || true
+          "$SHOREBIRD_BIN" patches list --release-version "$VERSION+$BUILD" 2>&1 | tee -a /tmp/patch.log || true
 
       - name: Upload patch log
         if: always()
