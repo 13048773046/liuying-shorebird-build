@@ -41,20 +41,15 @@ jobs:
           curl -fSL --retry 3 "$(cat /tmp/runner_url)" -o /tmp/runner.zip
           mkdir -p /tmp/runner_extract
           unzip -q /tmp/runner.zip -d /tmp/runner_extract
-          find /tmp/runner_extract -maxdepth 3 -name Info.plist -print
+          test -f /tmp/runner_extract/Info.plist
+          test -f /tmp/runner_extract/Runner
 
-      - name: Package signed-path IPA from exact release app
+      - name: Package IPA from exact release app
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import os, shutil, zipfile, plistlib, hashlib, subprocess
-          root='/tmp/runner_extract'
-          app_dir=None
-          for base, dirs, files in os.walk(root):
-              if 'Info.plist' in files and 'Runner' in files and base.endswith('Runner.app'):
-                  app_dir=base; break
-          if not app_dir:
-              raise SystemExit('Runner.app not found')
+          import os, shutil, plistlib, hashlib, subprocess
+          app_dir='/tmp/runner_extract'
           pl=plistlib.load(open(os.path.join(app_dir,'Info.plist'),'rb'))
           print('APP_DIR', app_dir)
           print('BUNDLE', pl.get('CFBundleIdentifier'), 'VERSION', pl.get('CFBundleShortVersionString'), 'BUILD', pl.get('CFBundleVersion'))
@@ -66,7 +61,6 @@ jobs:
           os.makedirs(out)
           dst=os.path.join(out,'Payload','Runner.app')
           shutil.copytree(app_dir, dst)
-          # ensure no stale signature
           for f in os.listdir(dst):
               if f=='_CodeSignature': shutil.rmtree(os.path.join(dst,f), ignore_errors=True)
           subprocess.run(['zip','-qry','/tmp/matched.ipa','Payload'], cwd=out, check=True)
