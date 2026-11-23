@@ -1,0 +1,112 @@
+name: Build and publish Shorebird Android patch
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_url:
+        description: Clean Flutter source archive URL
+        required: true
+        default: https://aka.doubaocdn.com/s/R3fMpFik4k
+      version:
+        description: Release version
+        required: true
+        default: 0.9.55
+      build:
+        description: Release build number
+        required: true
+        default: '126'
+
+permissions:
+  contents: read
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Download patch source
+        env:
+          SOURCE_URL: ${{ inputs.source_url }}
+        run: |
+          set -euo pipefail
+          curl -fSL --retry 5 --max-time 600 "$SOURCE_URL" -o /tmp/patch-source.tar.gz
+          mkdir -p source
+          tar -xzf /tmp/patch-source.tar.gz -C source
+          test -f source/lib/config.dart
+          grep -n "kHotUpdateStamp" source/lib/config.dart
+
+      - name: Create local git baseline
+        working-directory: source
+        run: |
+          git init -q
+          git config user.email "ci@liuying.local"
+          git config user.name "liuying-ci"
+          git add -A
+          git commit -q -m "shorebird android patch ${{ inputs.version }}+${{ inputs.build }}"
+
+      - name: Install Shorebird
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 5 https://shorebird.dev/install.sh | bash
+          SHOREBIRD_BIN="$(find "$HOME" -type f -path '*/shorebird/bin/shorebird' | head -1)"
+          test -n "$SHOREBIRD_BIN"
+          echo "SHOREBIRD_BIN=$SHOREBIRD_BIN" >> "$GITHUB_ENV"
+          "$SHOREBIRD_BIN" --version
+
+      - name: Fetch Shorebird API key from production
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PASS: ${{ secrets.PROD_PASS }}
+        run: |
+          set -euo pipefail
+          ASKPASS=$(mktemp)
+          printf '#!/bin/sh\necho "%s"\n' "$PROD_PASS" > "$ASKPASS"
+          chmod 700 "$ASKPASS"
+          DISPLAY=:0 SSH_ASKPASS="$ASKPASS" SSH_ASKPASS_REQUIRE=force ssh -o StrictHostKeyChecking=no "root@$PROD_HOST" 'cat /root/.shorebird_token' > /tmp/shorebird_token
+          test -s /tmp/shorebird_token
+          echo "::add-mask::$(cat /tmp/shorebird_token)"
+          echo "SHOREBIRD_TOKEN=$(cat /tmp/shorebird_token)" >> "$GITHUB_ENV"
+          rm -f "$ASKPASS"
+
+      - name: Verify Shorebird login
+        run: "$SHOREBIRD_BIN" auth status
+
+      - name: Prepare ephemeral Android signing key
+        run: |
+          set -euo pipefail
+          keytool -genkeypair -v \
+            -keystore /tmp/patch-release.jks \
+            -storepass patchonly -keypass patchonly \
+            -alias liuying-release \
+            -keyalg RSA -keysize 2048 -validity 3650 \
+            -dname "CN=Liuying Patch Only, OU=CI, O=Liuying, C=CN"
+          {
+            echo "ANDROID_KEYSTORE_PATH=/tmp/patch-release.jks"
+            echo "ANDROID_KEYSTORE_PASSWORD=patchonly"
+            echo "ANDROID_KEY_PASSWORD=patchonly"
+            echo "ANDROID_KEY_ALIAS=liuying-release"
+          } >> "$GITHUB_ENV"
+
+      - name: Publish Dart patch to stable
+        working-directory: source
+        run: |
+          set -o pipefail
+          "$SHOREBIRD_BIN" patch android \
+            --release-version "${{ inputs.version }}+${{ inputs.build }}" \
+            --build-name "${{ inputs.version }}" \
+            --build-number "${{ inputs.build }}" \
+            --track stable \
+            --no-confirm 2>&1 | tee /tmp/patch.log
+
+      - name: List releases and patches
+        run: |
+          "$SHOREBIRD_BIN" releases list 2>&1 | tee -a /tmp/patch.log || true
+          "$SHOREBIRD_BIN" patches list --release-version "${{ inputs.version }}+${{ inputs.build }}" 2>&1 | tee -a /tmp/patch.log || true
+
+      - name: Upload patch log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-patch-log
+          path: /tmp/patch.log
+          if-no-files-found: ignore
