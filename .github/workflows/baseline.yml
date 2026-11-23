@@ -1,0 +1,127 @@
+name: Build Shorebird iOS baseline
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - baseline-trigger.txt
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - name: Download Flutter source
+        run: |
+          set -euo pipefail
+          curl -fSL --retry 5 --max-time 600 "https://www.dbmt999.asia/community/files/community_src_0.9.55_shorebird.tar.gz" -o /tmp/source.tar.gz
+          mkdir -p source
+          tar -xzf /tmp/source.tar.gz -C source
+
+      - name: Create local git baseline
+        working-directory: source
+        run: |
+          git init -q
+          git config user.email "ci@liuying.local"
+          git config user.name "liuying-ci"
+          git add -A
+          git commit -q -m "shorebird baseline 0.9.55+126"
+
+      - name: Install Shorebird
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 5 https://shorebird.dev/install.sh | bash
+          echo "$HOME/.config/shorebird/bin" >> "$GITHUB_PATH"
+
+      - name: Restore Shorebird login
+        env:
+          SHOREBIRD_CREDENTIALS: ${{ secrets.SHOREBIRD_CREDENTIALS }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.config/shorebird"
+          printf '%s' "$SHOREBIRD_CREDENTIALS" > "$HOME/.config/shorebird/credentials-v2.json"
+          chmod 600 "$HOME/.config/shorebird/credentials-v2.json"
+
+      - name: Verify Shorebird login
+        run: shorebird auth status
+
+      - name: Build signed-in release (unsigned IPA)
+        working-directory: source
+        run: |
+          set -o pipefail
+          shorebird release ios --no-codesign --build-name 0.9.55 --build-number 126 2>&1 | tee /tmp/build.log
+
+      - name: Locate or assemble IPA
+        id: ipa
+        working-directory: source
+        run: |
+          set -euo pipefail
+          IPA=$(find build/ios/ipa -maxdepth 1 -name '*.ipa' -type f 2>/dev/null | head -1 || true)
+          if [ -z "$IPA" ]; then
+            APP=$(find build/ios/iphoneos -maxdepth 1 -name '*.app' -type d | head -1)
+            test -n "$APP"
+            mkdir -p build/ios/ipa/Payload
+            cp -R "$APP" build/ios/ipa/Payload/
+            (cd build/ios/ipa && zip -q -r community-0.9.55-shorebird-unsigned.ipa Payload)
+            IPA="build/ios/ipa/community-0.9.55-shorebird-unsigned.ipa"
+          fi
+          echo "ipa=$IPA" >> "$GITHUB_OUTPUT"
+          ls -lh "$IPA"
+          shasum -a 256 "$IPA"
+
+      - name: Upload IPA to production
+        env:
+          IPA_PATH: ${{ steps.ipa.outputs.ipa }}
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PASS: ${{ secrets.PROD_PASS }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet paramiko
+          python3 - <<'PY'
+          import hashlib, os, paramiko
+          src = os.path.join('source', os.environ['IPA_PATH'])
+          data = open(src, 'rb').read()
+          digest = hashlib.sha256(data).hexdigest()[:20]
+          name = f'community_ipa_{digest}.ipa'
+          c = paramiko.SSHClient()
+          c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+          c.connect(os.environ['PROD_HOST'], username='root', password=os.environ['PROD_PASS'], timeout=20)
+          s = c.open_sftp()
+          remote = '/www/wwwroot/Yosar-community/files/' + name
+          s.put(src, remote)
+          s.chmod(remote, 0o644)
+          print('IPA_BYTES', os.path.getsize(src))
+          print('IPA_SHA256', hashlib.sha256(data).hexdigest())
+          print('IPA_URL', 'https://www.dbmt999.asia/community/files/' + name)
+          s.close()
+          c.close()
+          PY
+
+      - name: Upload build log on failure
+        if: failure()
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PASS: ${{ secrets.PROD_PASS }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet paramiko
+          python3 - <<'PY'
+          import os, paramiko
+          log = '/tmp/build.log'
+          if not os.path.exists(log):
+              log = '/tmp/empty.log'
+              open(log, 'w').write('no build log')
+          c = paramiko.SSHClient()
+          c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+          c.connect(os.environ['PROD_HOST'], username='root', password=os.environ['PROD_PASS'], timeout=20)
+          s = c.open_sftp()
+          remote = '/www/wwwroot/Yosar-community/files/community_build_failed.log'
+          s.put(log, remote)
+          s.chmod(remote, 0o644)
+          s.close()
+          c.close()
+          PY
