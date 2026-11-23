@@ -1,0 +1,64 @@
+name: Compare release binaries
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - diag-binaries-trigger.txt
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Fetch release and public IPA
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PASS: ${{ secrets.PROD_PASS }}
+        run: |
+          set -euo pipefail
+          ASKPASS=$(mktemp)
+          printf '#!/bin/sh\necho "%s"\n' "$PROD_PASS" > "$ASKPASS"
+          chmod 700 "$ASKPASS"
+          DISPLAY=:0 SSH_ASKPASS="$ASKPASS" SSH_ASKPASS_REQUIRE=force ssh -o StrictHostKeyChecking=no "root@$PROD_HOST" 'cat /root/.shorebird_token' > /tmp/shorebird_token
+          test -s /tmp/shorebird_token
+          rm -f "$ASKPASS"
+          APP=f8c3d63a-0d9a-411d-9553-fcb7e7232f43
+          curl -sS -H "Authorization: Bearer $(cat /tmp/shorebird_token)" \
+            "https://api.shorebird.dev/api/v1/apps/$APP/releases/1005608/artifacts?platform=ios" -o /tmp/artifacts.json
+          python3 - <<'PY'
+          import json
+          arts=json.load(open('/tmp/artifacts.json'))['artifacts']
+          runner=[a for a in arts if a.get('arch')=='runner'][0]
+          open('/tmp/runner_url','w').write(runner['url'])
+          print('RUNNER_ARCHIVE_HASH', runner['hash'], 'SIZE', runner['size'])
+          PY
+          curl -fSL --retry 3 "$(cat /tmp/runner_url)" -o /tmp/runner.zip
+          mkdir -p /tmp/release_app
+          unzip -q /tmp/runner.zip -d /tmp/release_app
+          curl -fSL --retry 3 'https://www.dbmt999.asia/community/files/community_ipa_0.9.55_hotfix_unsigned.ipa' -o /tmp/public.ipa
+          mkdir -p /tmp/public
+          unzip -q /tmp/public.ipa -d /tmp/public
+          ls -l /tmp/public/Payload/Runner.app/Frameworks/App.framework/App /tmp/release_app/Frameworks/App.framework/App
+
+      - name: Hash key binaries
+        run: |
+          python3 - <<'PY'
+          import hashlib, os
+          pairs=[
+            ('Runner','Runner'),
+            ('App.framework/App','Frameworks/App.framework/App'),
+            ('Flutter.framework/Flutter','Frameworks/Flutter.framework/Flutter'),
+            ('App.framework/flutter_assets/kernel_blob.bin','Frameworks/App.framework/flutter_assets/kernel_blob.bin'),
+            ('App.framework/flutter_assets/AssetManifest.bin','Frameworks/App.framework/flutter_assets/AssetManifest.bin'),
+          ]
+          def sha(p): return hashlib.sha256(open(p,'rb').read()).hexdigest() if os.path.exists(p) else 'MISSING'
+          for label, rel in pairs:
+            pub='/tmp/public/Payload/Runner.app/'+rel
+            relr='/tmp/release_app/'+rel
+            hp, hr=sha(pub), sha(relr)
+            print(f'{label} PUBLIC {hp} {os.path.getsize(pub) if os.path.exists(pub) else 0} RELEASE {hr} {os.path.getsize(relr) if os.path.exists(relr) else 0} {"MATCH" if hp==hr and hp!="MISSING" else "DIFF"}')
+          PY
