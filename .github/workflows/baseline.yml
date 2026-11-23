@@ -43,10 +43,11 @@ jobs:
           SHOREBIRD_CREDENTIALS: ${{ secrets.SHOREBIRD_CREDENTIALS }}
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/.shorebird" "$HOME/.config/shorebird"
-          printf '%s' "$SHOREBIRD_CREDENTIALS" > "$HOME/.shorebird/credentials-v2.json"
-          printf '%s' "$SHOREBIRD_CREDENTIALS" > "$HOME/.config/shorebird/credentials-v2.json"
-          chmod 600 "$HOME/.shorebird/credentials-v2.json" "$HOME/.config/shorebird/credentials-v2.json"
+          for dir in "$HOME/Library/Application Support/shorebird" "$HOME/.shorebird" "$HOME/.config/shorebird"; do
+            mkdir -p "$dir"
+            printf '%s' "$SHOREBIRD_CREDENTIALS" > "$dir/credentials-v2.json"
+            chmod 600 "$dir/credentials-v2.json"
+          done
 
       - name: Verify Shorebird login
         run: |
@@ -100,31 +101,6 @@ jobs:
           print('IPA_BYTES', os.path.getsize(src))
           print('IPA_SHA256', hashlib.sha256(data).hexdigest())
           print('IPA_URL', 'https://www.dbmt999.asia/community/files/' + name)
-          s.close()
-          c.close()
-          PY
-
-      - name: Upload build log on failure
-        if: failure()
-        env:
-          PROD_HOST: ${{ secrets.PROD_HOST }}
-          PROD_PASS: ${{ secrets.PROD_PASS }}
-        run: |
-          set -euo pipefail
-          python3 -m pip install --quiet --user --break-system-packages paramiko
-          python3 - <<'PY'
-          import os, paramiko
-          log = '/tmp/build.log'
-          if not os.path.exists(log):
-              log = '/tmp/empty.log'
-              open(log, 'w').write('no build log')
-          c = paramiko.SSHClient()
-          c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-          c.connect(os.environ['PROD_HOST'], username='root', password=os.environ['PROD_PASS'], timeout=20)
-          s = c.open_sftp()
-          remote = '/www/wwwroot/Yosar-community/files/community_build_failed.log'
-          s.put(log, remote)
-          s.chmod(remote, 0o644)
           s.close()
           c.close()
           PY
