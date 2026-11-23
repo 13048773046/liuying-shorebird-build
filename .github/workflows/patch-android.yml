@@ -104,6 +104,7 @@ jobs:
             --release-version "$VERSION+$BUILD" \
             --build-name "$VERSION" \
             --build-number "$BUILD" \
+            --allow-native-diffs \
             --track stable \
             --no-confirm 2>&1 | tee /tmp/patch.log
 
