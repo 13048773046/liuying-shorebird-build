@@ -1,0 +1,90 @@
+name: Setup Shorebird reverse proxy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - proxy-trigger.txt
+
+permissions:
+  contents: read
+
+jobs:
+  proxy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Configure nginx proxy on production
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PASS: ${{ secrets.PROD_PASS }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+          export SSHPASS="$PROD_PASS"
+          sshpass -e ssh -o StrictHostKeyChecking=no "root@$PROD_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          echo '=== reach api.shorebird.dev ==='
+          curl -sS -o /dev/null -w 'api_status=%{http_code}\n' --max-time 15 https://api.shorebird.dev/api/v1/status || true
+          echo '=== candidate configs ==='
+          grep -rl 'server_name.*www\.dbmt999\.asia' /www/server/panel/vhost/nginx /etc/nginx 2>/dev/null || true
+          python3 - <<'PY'
+          import glob, os, shutil, re, subprocess, sys, time
+          candidates=[]
+          for pat in ['/www/server/panel/vhost/nginx/*.conf','/etc/nginx/conf.d/*.conf','/etc/nginx/sites-enabled/*']:
+              candidates += glob.glob(pat)
+          chosen=None
+          for p in candidates:
+              try: t=open(p, encoding='utf-8', errors='ignore').read()
+              except: continue
+              if re.search(r'server_name[^;]*www\.dbmt999\.asia', t):
+                  chosen=p; break
+          if not chosen:
+              print('NO_CONFIG'); sys.exit(1)
+          print('CONFIG', chosen)
+          t=open(chosen, encoding='utf-8').read()
+          if 'location /shorebird-api/' in t:
+              print('PROXY_ALREADY_PRESENT')
+          else:
+              m=re.search(r'(server_name[^;]*www\.dbmt999\.asia[^;]*;)', t)
+              block='''
+              location /shorebird-api/ {
+                  proxy_pass https://api.shorebird.dev/;
+                  proxy_ssl_server_name on;
+                  proxy_ssl_name api.shorebird.dev;
+                  proxy_set_header Host api.shorebird.dev;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_http_version 1.1;
+                  proxy_set_header Connection "";
+                  proxy_connect_timeout 10s;
+                  proxy_read_timeout 60s;
+                  proxy_buffering off;
+                  client_max_body_size 20m;
+              }
+              '''
+              t=t[:m.end()]+block+t[m.end():]
+              bak=chosen+'.bak.shorebird.'+time.strftime('%Y%m%d%H%M%S')
+              shutil.copy2(chosen,bak)
+              open(chosen,'w',encoding='utf-8').write(t)
+              print('BACKUP',bak)
+          test=subprocess.run(['nginx','-t'],capture_output=True,text=True)
+          print(test.stdout,test.stderr)
+          if test.returncode!=0:
+              print('NGINX_TEST_FAILED'); sys.exit(2)
+          subprocess.run(['nginx','-s','reload'],check=True)
+          print('NGINX_RELOADED')
+          PY
+          echo '=== proxy check ==='
+          curl -sS -o /tmp/proxy_check.json -w 'proxy_status=%{http_code}\n' --max-time 20 \
+            -X POST -H 'Content-Type: application/json' \
+            -d '{"app_id":"f8c3d63a-0d9a-411d-9553-fcb7e7232f43","release_version":"0.9.55+126","platform":"ios","arch":"aarch64","channel":"stable","patch_number":0}' \
+            https://www.dbmt999.asia/shorebird-api/api/v1/patches/check || true
+          head -c 500 /tmp/proxy_check.json || true
+          echo
+          echo '=== direct check ==='
+          curl -sS -o /dev/null -w 'direct_status=%{http_code}\n' --max-time 20 \
+            -X POST -H 'Content-Type: application/json' \
+            -d '{"app_id":"f8c3d63a-0d9a-411d-9553-fcb7e7232f43","release_version":"0.9.55+126","platform":"ios","arch":"aarch64","channel":"stable","patch_number":0}' \
+            https://api.shorebird.dev/api/v1/patches/check || true
+          REMOTE
