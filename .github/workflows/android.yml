@@ -35,8 +35,10 @@ jobs:
         run: |
           set -euo pipefail
           curl -fsSL --retry 5 https://shorebird.dev/install.sh | bash
-          test -x "$HOME/.shorebird/bin/shorebird"
-          "$HOME/.shorebird/bin/shorebird" --version
+          SHOREBIRD_BIN="$(find "$HOME" -type f -path '*/shorebird/bin/shorebird' | head -1)"
+          test -n "$SHOREBIRD_BIN"
+          echo "SHOREBIRD_BIN=$SHOREBIRD_BIN" >> "$GITHUB_ENV"
+          "$SHOREBIRD_BIN" --version
 
       - name: Restore Shorebird login
         env:
@@ -51,13 +53,13 @@ jobs:
 
       - name: Verify Shorebird login
         run: |
-          "$HOME/.shorebird/bin/shorebird" auth status
+          "$SHOREBIRD_BIN" auth status
 
       - name: Build Shorebird APK
         working-directory: source
         run: |
           set -o pipefail
-          "$HOME/.shorebird/bin/shorebird" release android --artifact apk --build-name 0.9.55 --build-number 126 2>&1 | tee /tmp/android-build.log
+          "$SHOREBIRD_BIN" release android --artifact apk --build-name 0.9.55 --build-number 126 2>&1 | tee /tmp/android-build.log
 
       - name: Locate APK
         id: apk
