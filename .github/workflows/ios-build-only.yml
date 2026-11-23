@@ -1,0 +1,87 @@
+name: Build Shorebird iOS baseline artifacts
+on:
+  push:
+    branches: [main]
+    paths:
+      - ios-only-trigger.txt
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - name: Download Flutter source
+        run: |
+          set -euo pipefail
+          curl -fSL --retry 5 --max-time 600 "https://www.dbmt999.asia/community/files/community_src_0.9.55_shorebird.tar.gz" -o /tmp/source.tar.gz
+          mkdir -p source
+          tar -xzf /tmp/source.tar.gz -C source
+      - name: Create local git baseline
+        working-directory: source
+        run: |
+          git init -q
+          git config user.email "ci@liuying.local"
+          git config user.name "liuying-ci"
+          git add -A
+          git commit -q -m "shorebird ios artifacts 0.9.55+126"
+      - name: Install Shorebird toolchain
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 5 https://shorebird.dev/install.sh | bash
+          test -x "$HOME/.shorebird/bin/shorebird"
+          FLUTTER_BIN="$(find "$HOME/.shorebird/bin/cache/flutter" -type f -path '*/bin/flutter' -perm -111 | head -1)"
+          test -n "$FLUTTER_BIN"
+          echo "FLUTTER_BIN=$FLUTTER_BIN" >> "$GITHUB_ENV"
+          "$FLUTTER_BIN" --version
+      - name: Build unsigned iOS archive with Shorebird Flutter
+        working-directory: source
+        run: |
+          set -o pipefail
+          "$FLUTTER_BIN" build ipa --release --no-codesign --build-name 0.9.55 --build-number 126 2>&1 | tee /tmp/ios-build.log
+      - name: Package IPA and archive
+        id: ipa
+        working-directory: source
+        run: |
+          set -euo pipefail
+          ARCHIVE=$(find build/ios/archive -maxdepth 1 -name '*.xcarchive' -type d | head -1)
+          test -n "$ARCHIVE"
+          APP=$(find "$ARCHIVE/Products/Applications" -maxdepth 1 -name '*.app' -type d | head -1)
+          test -n "$APP"
+          mkdir -p build/ios/ipa/Payload
+          cp -R "$APP" build/ios/ipa/Payload/
+          (cd build/ios/ipa && zip -q -r community-0.9.55-shorebird-unsigned.ipa Payload)
+          IPA="build/ios/ipa/community-0.9.55-shorebird-unsigned.ipa"
+          test -f "$IPA"
+          echo "ipa=$IPA" >> "$GITHUB_OUTPUT"
+          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
+          ls -lh "$IPA"
+          shasum -a 256 "$IPA"
+      - name: Upload IPA to production
+        env:
+          IPA_PATH: ${{ steps.ipa.outputs.ipa }}
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PASS: ${{ secrets.PROD_PASS }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet --user --break-system-packages paramiko
+          python3 - <<'PY'
+          import hashlib, os, paramiko
+          src = os.path.join('source', os.environ['IPA_PATH'])
+          data = open(src, 'rb').read()
+          digest = hashlib.sha256(data).hexdigest()[:20]
+          name = f'community_ipa_{digest}.ipa'
+          c = paramiko.SSHClient()
+          c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+          c.connect(os.environ['PROD_HOST'], username='root', password=os.environ['PROD_PASS'], timeout=20)
+          s = c.open_sftp()
+          remote = '/www/wwwroot/Yosar-community/files/' + name
+          s.put(src, remote)
+          s.chmod(remote, 0o644)
+          print('IPA_BYTES', os.path.getsize(src))
+          print('IPA_SHA256', hashlib.sha256(data).hexdigest())
+          print('IPA_URL', 'https://www.dbmt999.asia/community/files/' + name)
+          s.close()
+          c.close()
+          PY
