@@ -52,15 +52,20 @@ jobs:
           test -x "$HOME/.shorebird/bin/shorebird"
           "$HOME/.shorebird/bin/shorebird" --version
 
-      - name: Restore Shorebird login
+      - name: Fetch Shorebird API key from production
         env:
-          SHOREBIRD_CREDENTIALS: ${{ secrets.SHOREBIRD_CREDENTIALS }}
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PASS: ${{ secrets.PROD_PASS }}
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/.shorebird" "$HOME/.config/shorebird"
-          printf '%s' "$SHOREBIRD_CREDENTIALS" > "$HOME/.shorebird/credentials-v2.json"
-          printf '%s' "$SHOREBIRD_CREDENTIALS" > "$HOME/.config/shorebird/credentials-v2.json"
-          chmod 600 "$HOME/.shorebird/credentials-v2.json" "$HOME/.config/shorebird/credentials-v2.json"
+          ASKPASS=$(mktemp)
+          printf '#!/bin/sh\necho "%s"\n' "$PROD_PASS" > "$ASKPASS"
+          chmod 700 "$ASKPASS"
+          DISPLAY=:0 SSH_ASKPASS="$ASKPASS" SSH_ASKPASS_REQUIRE=force ssh -o StrictHostKeyChecking=no "root@$PROD_HOST" 'cat /root/.shorebird_token' > /tmp/shorebird_token
+          test -s /tmp/shorebird_token
+          echo "::add-mask::$(cat /tmp/shorebird_token)"
+          echo "SHOREBIRD_TOKEN=$(cat /tmp/shorebird_token)" >> "$GITHUB_ENV"
+          rm -f "$ASKPASS"
 
       - name: Verify Shorebird login
         run: |
