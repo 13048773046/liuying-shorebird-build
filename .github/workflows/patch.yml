@@ -49,27 +49,28 @@ jobs:
         run: |
           set -euo pipefail
           curl -fsSL --retry 5 https://shorebird.dev/install.sh | bash
-          test -x "$HOME/.config/shorebird/bin/shorebird"
-          "$HOME/.config/shorebird/bin/shorebird" --version
+          test -x "$HOME/.shorebird/bin/shorebird"
+          "$HOME/.shorebird/bin/shorebird" --version
 
       - name: Restore Shorebird login
         env:
           SHOREBIRD_CREDENTIALS: ${{ secrets.SHOREBIRD_CREDENTIALS }}
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/.config/shorebird"
+          mkdir -p "$HOME/.shorebird" "$HOME/.config/shorebird"
+          printf '%s' "$SHOREBIRD_CREDENTIALS" > "$HOME/.shorebird/credentials-v2.json"
           printf '%s' "$SHOREBIRD_CREDENTIALS" > "$HOME/.config/shorebird/credentials-v2.json"
-          chmod 600 "$HOME/.config/shorebird/credentials-v2.json"
+          chmod 600 "$HOME/.shorebird/credentials-v2.json" "$HOME/.config/shorebird/credentials-v2.json"
 
       - name: Verify Shorebird login
         run: |
-          "$HOME/.config/shorebird/bin/shorebird" auth status
+          "$HOME/.shorebird/bin/shorebird" auth status
 
       - name: Publish Dart patch to stable
         working-directory: source
         run: |
           set -o pipefail
-          "$HOME/.config/shorebird/bin/shorebird" patch ios \
+          "$HOME/.shorebird/bin/shorebird" patch ios \
             --release-version "$VERSION" \
             --build-name "$VERSION" \
             --build-number "$BUILD" \
@@ -78,8 +79,8 @@ jobs:
 
       - name: List releases and patches
         run: |
-          "$HOME/.config/shorebird/bin/shorebird" releases list --version "$VERSION" 2>&1 | tee -a /tmp/patch.log || true
-          "$HOME/.config/shorebird/bin/shorebird" patches list --version "$VERSION" 2>&1 | tee -a /tmp/patch.log || true
+          "$HOME/.shorebird/bin/shorebird" releases list --version "$VERSION" 2>&1 | tee -a /tmp/patch.log || true
+          "$HOME/.shorebird/bin/shorebird" patches list --version "$VERSION" 2>&1 | tee -a /tmp/patch.log || true
 
       - name: Upload patch log to production
         if: always()
