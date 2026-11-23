@@ -1,0 +1,8 @@
+name: Runner capability test
+on:
+  workflow_dispatch:
+jobs:
+  macos:
+    runs-on: macos-15
+    steps:
+      - run: sw_vers
