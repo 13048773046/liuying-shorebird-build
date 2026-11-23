@@ -12,7 +12,7 @@ permissions:
 jobs:
   diag:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Check iOS patch availability
         run: |
@@ -51,49 +51,34 @@ jobs:
               print(json.dumps(data, ensure_ascii=False)[:3000])
           PY
 
-      - name: Inspect release signing metadata
+      - name: Compare IPA binary with released runner artifact
         run: |
           set -euo pipefail
           TOKEN=$(cat /tmp/shorebird_token)
           APP=f8c3d63a-0d9a-411d-9553-fcb7e7232f43
-          echo '=== signing-key ==='
           curl -sS -H "Authorization: Bearer $TOKEN" \
-            "https://api.shorebird.dev/api/v1/apps/$APP/signing-key" | tee /tmp/signing-key.json
-          echo
-          echo '=== release ==='
-          curl -sS -H "Authorization: Bearer $TOKEN" \
-            "https://api.shorebird.dev/api/v1/apps/$APP/releases/1005608" | tee /tmp/release.json
-          echo
-          echo '=== ios release artifacts ==='
-          curl -sS -H "Authorization: Bearer $TOKEN" \
-            "https://api.shorebird.dev/api/v1/apps/$APP/releases/1005608/artifacts?platform=ios" | tee /tmp/artifacts.json
-          echo
-          echo '=== patches ==='
-          curl -sS -H "Authorization: Bearer $TOKEN" \
-            "https://api.shorebird.dev/api/v1/apps/$APP/releases/1005608/patches" | tee /tmp/patches.json
-          echo
+            "https://api.shorebird.dev/api/v1/apps/$APP/releases/1005608/artifacts?platform=ios" -o /tmp/artifacts.json
           python3 - <<'PY'
-          import json, re, urllib.request
-          key=json.load(open('/tmp/signing-key.json'))
-          print('SIGNING_KEY', json.dumps(key, ensure_ascii=False)[:500])
-          rel=json.load(open('/tmp/release.json'))
-          print('RELEASE', json.dumps(rel, ensure_ascii=False)[:2000])
-          arts=json.load(open('/tmp/artifacts.json'))
-          print('ARTIFACTS', json.dumps(arts, ensure_ascii=False)[:2000])
-          patches=json.load(open('/tmp/patches.json'))
-          print('PATCHES', json.dumps(patches, ensure_ascii=False)[:2000])
-          # Compare with the public key embedded in the exact public baseline IPA.
+          import json, urllib.request, zipfile, hashlib, os
+          arts=json.load(open('/tmp/artifacts.json'))['artifacts']
+          runner=[a for a in arts if a.get('arch')=='runner'][0]
+          print('RUNNER_HASH', runner['hash'], 'SIZE', runner['size'], 'URL_LEN', len(runner['url']))
+          urllib.request.urlretrieve(runner['url'], '/tmp/runner.zip')
+          with zipfile.ZipFile('/tmp/runner.zip') as z:
+              z.extractall('/tmp/runner_app')
+          candidates=[]
+          for root, dirs, files in os.walk('/tmp/runner_app'):
+              for f in files:
+                  p=os.path.join(root,f)
+                  if f=='Runner': candidates.append(p)
+          print('RUNNER_CANDIDATES', candidates[:5])
+          for p in candidates[:2]:
+              print('RELEASE_RUNNER_SHA256', p, hashlib.sha256(open(p,'rb').read()).hexdigest(), os.path.getsize(p))
           ipa='/tmp/baseline.ipa'
-          urllib.request.urlretrieve('https://www.dbmt999.asia/community/files/community_ipa_0.9.55_hotfix_unsigned.ipa', ipa)
-          import zipfile
+          if not os.path.exists(ipa):
+              urllib.request.urlretrieve('https://www.dbmt999.asia/community/files/community_ipa_0.9.55_hotfix_unsigned.ipa', ipa)
           with zipfile.ZipFile(ipa) as z:
-              text=z.read('Payload/Runner.app/Frameworks/App.framework/flutter_assets/shorebird.yaml').decode()
-          m=re.search(r'patch_public_key: *(.+)', text)
-          baseline=m.group(1).strip() if m else ''
-          server=(key.get('signing_key') or {}).get('public_key_pem','').strip()
-          print('BASELINE_KEY_SHA256', __import__('hashlib').sha256(baseline.encode()).hexdigest())
-          print('SERVER_KEY_SHA256', __import__('hashlib').sha256(server.encode()).hexdigest())
-          print('KEYS_MATCH', baseline == server)
-          print('BASELINE_KEY_PREFIX', baseline[:40])
-          print('SERVER_KEY_PREFIX', server[:40])
+              z.extract('Payload/Runner.app/Runner', '/tmp/ipa_exact')
+          p='/tmp/ipa_exact/Payload/Runner.app/Runner'
+          print('IPA_RUNNER_SHA256', hashlib.sha256(open(p,'rb').read()).hexdigest(), os.path.getsize(p))
           PY
