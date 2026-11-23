@@ -1,0 +1,108 @@
+name: Build and publish Shorebird iOS patch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - patch-trigger.txt
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  patch:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - name: Read patch descriptor
+        run: |
+          set -euo pipefail
+          while IFS='=' read -r key value; do
+            value=${value%$'\r'}
+            if [ -n "$key" ]; then echo "$key=$value" >> "$GITHUB_ENV"; fi
+          done < patch-trigger.txt
+          test -n "$SOURCE_URL"
+          test -n "$VERSION"
+          test -n "$BUILD"
+          echo "Patch target: $VERSION+$BUILD"
+
+      - name: Download patch source
+        run: |
+          set -euo pipefail
+          curl -fSL --retry 5 --max-time 600 "$SOURCE_URL" -o /tmp/patch-source.tar.gz
+          mkdir -p source
+          tar -xzf /tmp/patch-source.tar.gz -C source
+          test -f source/lib/config.dart
+          grep -n "kHotUpdateStamp" source/lib/config.dart
+
+      - name: Create local git baseline
+        working-directory: source
+        run: |
+          git init -q
+          git config user.email "ci@liuying.local"
+          git config user.name "liuying-ci"
+          git add -A
+          git commit -q -m "shorebird patch $VERSION+$BUILD"
+
+      - name: Install Shorebird
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 5 https://shorebird.dev/install.sh | bash
+          test -x "$HOME/.config/shorebird/bin/shorebird"
+          "$HOME/.config/shorebird/bin/shorebird" --version
+
+      - name: Restore Shorebird login
+        env:
+          SHOREBIRD_CREDENTIALS: ${{ secrets.SHOREBIRD_CREDENTIALS }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.config/shorebird"
+          printf '%s' "$SHOREBIRD_CREDENTIALS" > "$HOME/.config/shorebird/credentials-v2.json"
+          chmod 600 "$HOME/.config/shorebird/credentials-v2.json"
+
+      - name: Verify Shorebird login
+        run: |
+          "$HOME/.config/shorebird/bin/shorebird" auth status
+
+      - name: Publish Dart patch to stable
+        working-directory: source
+        run: |
+          set -o pipefail
+          "$HOME/.config/shorebird/bin/shorebird" patch ios \
+            --release-version "$VERSION" \
+            --build-name "$VERSION" \
+            --build-number "$BUILD" \
+            --no-codesign \
+            --track stable 2>&1 | tee /tmp/patch.log
+
+      - name: List releases and patches
+        run: |
+          "$HOME/.config/shorebird/bin/shorebird" releases list --version "$VERSION" 2>&1 | tee -a /tmp/patch.log || true
+          "$HOME/.config/shorebird/bin/shorebird" patches list --version "$VERSION" 2>&1 | tee -a /tmp/patch.log || true
+
+      - name: Upload patch log to production
+        if: always()
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PASS: ${{ secrets.PROD_PASS }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet --user --break-system-packages paramiko
+          python3 - <<'PY'
+          import os, paramiko
+          log = '/tmp/patch.log'
+          if not os.path.exists(log):
+              log = '/tmp/empty.log'
+              open(log, 'w').write('no patch log')
+          c = paramiko.SSHClient()
+          c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+          c.connect(os.environ['PROD_HOST'], username='root', password=os.environ['PROD_PASS'], timeout=20)
+          s = c.open_sftp()
+          remote = '/www/wwwroot/Yosar-community/files/community_patch_latest.log'
+          s.put(log, remote)
+          s.chmod(remote, 0o644)
+          s.close()
+          c.close()
+          print('PATCH_LOG_URL', 'https://www.dbmt999.asia/community/files/community_patch_latest.log')
+          PY
