@@ -31,7 +31,7 @@ jobs:
           q = shlex.quote(key)
           cmd = (
               'mkdir -p /root/.ssh && touch /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && '
-              f'(grep -qF {q} /root/.ssh/authorized_keys || printf "%s\\n" {q} >> /root/.ssh/authorized_keys) && '
+              f'(grep -qF {q} /root/.ssh/authorized_keys || printf "\\n%s\\n" {q} >> /root/.ssh/authorized_keys) && '
               f'grep -cF {q} /root/.ssh/authorized_keys'
           )
           stdin, stdout, stderr = c.exec_command(cmd)
