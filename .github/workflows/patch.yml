@@ -24,7 +24,10 @@ jobs:
           test -f patch-trigger.txt
           while IFS='=' read -r key value; do
             value=${value%$'\r'}
-            if [ -n "$key" ]; then echo "$key=$value" >> "$GITHUB_ENV"; fi
+            if [ -n "$key" ]; then
+              echo "$key=$value" >> "$GITHUB_ENV"
+              export "$key=$value"
+            fi
           done < patch-trigger.txt
           test -n "$SOURCE_URL"
           test -n "$VERSION"
