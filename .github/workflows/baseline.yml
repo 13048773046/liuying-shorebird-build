@@ -35,7 +35,8 @@ jobs:
         run: |
           set -euo pipefail
           curl -fsSL --retry 5 https://shorebird.dev/install.sh | bash
-          echo "$HOME/.config/shorebird/bin" >> "$GITHUB_PATH"
+          test -x "$HOME/.config/shorebird/bin/shorebird"
+          "$HOME/.config/shorebird/bin/shorebird" --version
 
       - name: Restore Shorebird login
         env:
@@ -47,13 +48,13 @@ jobs:
           chmod 600 "$HOME/.config/shorebird/credentials-v2.json"
 
       - name: Verify Shorebird login
-        run: shorebird auth status
+        run: "$HOME/.config/shorebird/bin/shorebird" auth status
 
       - name: Build signed-in release (unsigned IPA)
         working-directory: source
         run: |
           set -o pipefail
-          shorebird release ios --no-codesign --build-name 0.9.55 --build-number 126 2>&1 | tee /tmp/build.log
+          "$HOME/.config/shorebird/bin/shorebird" release ios --no-codesign --build-name 0.9.55 --build-number 126 2>&1 | tee /tmp/build.log
 
       - name: Locate or assemble IPA
         id: ipa
@@ -80,7 +81,7 @@ jobs:
           PROD_PASS: ${{ secrets.PROD_PASS }}
         run: |
           set -euo pipefail
-          python3 -m pip install --quiet paramiko
+          python3 -m pip install --quiet --user --break-system-packages paramiko
           python3 - <<'PY'
           import hashlib, os, paramiko
           src = os.path.join('source', os.environ['IPA_PATH'])
@@ -108,7 +109,7 @@ jobs:
           PROD_PASS: ${{ secrets.PROD_PASS }}
         run: |
           set -euo pipefail
-          python3 -m pip install --quiet paramiko
+          python3 -m pip install --quiet --user --break-system-packages paramiko
           python3 - <<'PY'
           import os, paramiko
           log = '/tmp/build.log'
