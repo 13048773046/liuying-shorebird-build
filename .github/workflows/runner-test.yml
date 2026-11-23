@@ -1,5 +1,9 @@
 name: Runner capability test
 on:
+  push:
+    branches: [main]
+    paths:
+      - runner-trigger.txt
   workflow_dispatch:
 jobs:
   macos:
