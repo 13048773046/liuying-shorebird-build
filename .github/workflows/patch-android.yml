@@ -77,7 +77,8 @@ jobs:
           rm -f "$ASKPASS"
 
       - name: Verify Shorebird login
-        run: "$SHOREBIRD_BIN" auth status
+        run: |
+          "$SHOREBIRD_BIN" auth status
 
       - name: Prepare ephemeral Android signing key
         run: |
