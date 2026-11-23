@@ -48,7 +48,8 @@ jobs:
           chmod 600 "$HOME/.config/shorebird/credentials-v2.json"
 
       - name: Verify Shorebird login
-        run: "$HOME/.config/shorebird/bin/shorebird" auth status
+        run: |
+          "$HOME/.config/shorebird/bin/shorebird" auth status
 
       - name: Build signed-in release (unsigned IPA)
         working-directory: source
