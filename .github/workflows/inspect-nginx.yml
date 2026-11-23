@@ -23,10 +23,16 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
           export SSHPASS="$PROD_PASS"
           sshpass -e ssh -o StrictHostKeyChecking=no "root@$PROD_HOST" 'bash -s' <<'REMOTE'
-          echo '=== grep ==='
-          grep -nE 'server_name|listen|shorebird-api|ssl_certificate|return 301|location /' /etc/nginx/conf.d/www.dbmt999.asia.conf | head -80
-          echo '=== full first 100 ==='
-          nl -ba /etc/nginx/conf.d/www.dbmt999.asia.conf | sed -n '1,100p'
-          echo '=== nginx -T grep ==='
-          nginx -T 2>/dev/null | grep -nE 'server_name|listen|shorebird-api' | tail -40
+          echo '=== block 295-370 ==='
+          nl -ba /etc/nginx/conf.d/www.dbmt999.asia.conf | sed -n '295,370p'
+          echo '=== proxy headers ==='
+          curl -sS -D - -o /tmp/proxy_body -X POST -H 'Content-Type: application/json' \
+            -d '{"app_id":"f8c3d63a-0d9a-411d-9553-fcb7e7232f43","release_version":"0.9.55+126","platform":"ios","arch":"aarch64","channel":"stable","patch_number":0}' \
+            https://www.dbmt999.asia/shorebird-api/api/v1/patches/check || true
+          echo '=== proxy body ==='; head -c 400 /tmp/proxy_body || true; echo
+          echo '=== direct headers ==='
+          curl -sS -D - -o /tmp/direct_body -X POST -H 'Content-Type: application/json' \
+            -d '{"app_id":"f8c3d63a-0d9a-411d-9553-fcb7e7232f43","release_version":"0.9.55+126","platform":"ios","arch":"aarch64","channel":"stable","patch_number":0}' \
+            https://api.shorebird.dev/api/v1/patches/check || true
+          echo '=== direct body ==='; head -c 400 /tmp/direct_body || true; echo
           REMOTE
