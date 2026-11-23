@@ -1,0 +1,32 @@
+name: Inspect nginx config
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - nginx-inspect-trigger.txt
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Print nginx config structure
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PASS: ${{ secrets.PROD_PASS }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+          export SSHPASS="$PROD_PASS"
+          sshpass -e ssh -o StrictHostKeyChecking=no "root@$PROD_HOST" 'bash -s' <<'REMOTE'
+          echo '=== grep ==='
+          grep -nE 'server_name|listen|shorebird-api|ssl_certificate|return 301|location /' /etc/nginx/conf.d/www.dbmt999.asia.conf | head -80
+          echo '=== full first 100 ==='
+          nl -ba /etc/nginx/conf.d/www.dbmt999.asia.conf | sed -n '1,100p'
+          echo '=== nginx -T grep ==='
+          nginx -T 2>/dev/null | grep -nE 'server_name|listen|shorebird-api' | tail -40
+          REMOTE
