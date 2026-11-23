@@ -1,0 +1,52 @@
+name: Diagnose Shorebird iOS delivery
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - diag-trigger.txt
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check iOS patch availability
+        run: |
+          set -euo pipefail
+          cat > /tmp/check.json <<'JSON'
+          {"release_version":"0.9.55+126","platform":"ios","arch":"aarch64","app_id":"f8c3d63a-0d9a-411d-9553-fcb7e7232f43","channel":"stable","patch_number":3}
+          JSON
+          curl -sS -X POST 'https://api.shorebird.dev/api/v1/patches/check' \
+            -H 'content-type: application/json' --data-binary @/tmp/check.json | tee /tmp/check-response.json
+          echo
+          python3 -m json.tool /tmp/check-response.json | head -40
+
+      - name: Fetch Shorebird token and download metrics
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PASS: ${{ secrets.PROD_PASS }}
+        run: |
+          set -euo pipefail
+          ASKPASS=$(mktemp)
+          printf '#!/bin/sh\necho "%s"\n' "$PROD_PASS" > "$ASKPASS"
+          chmod 700 "$ASKPASS"
+          DISPLAY=:0 SSH_ASKPASS="$ASKPASS" SSH_ASKPASS_REQUIRE=force ssh -o StrictHostKeyChecking=no "root@$PROD_HOST" 'cat /root/.shorebird_token' > /tmp/shorebird_token
+          test -s /tmp/shorebird_token
+          rm -f "$ASKPASS"
+          curl -sS -H "Authorization: Bearer $(cat /tmp/shorebird_token)" \
+            'https://api.shorebird.dev/api/v1/apps/f8c3d63a-0d9a-411d-9553-fcb7e7232f43/releases/1005608/metrics/patch-downloads?start=2026-11-23T00:00:00Z&granularity=hour&group_by=patch' \
+            -o /tmp/downloads.json
+          curl -sS -H "Authorization: Bearer $(cat /tmp/shorebird_token)" \
+            'https://api.shorebird.dev/api/v1/apps/f8c3d63a-0d9a-411d-9553-fcb7e7232f43/releases/1005608/metrics/patch-installs?start=2026-11-23T00:00:00Z&granularity=hour&group_by=patch' \
+            -o /tmp/installs.json
+          python3 - <<'PY'
+          import json
+          for name in ['downloads','installs']:
+              data=json.load(open(f'/tmp/{name}.json'))
+              print('===',name)
+              print(json.dumps(data, ensure_ascii=False)[:3000])
+          PY
